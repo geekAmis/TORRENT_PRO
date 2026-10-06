@@ -1,10 +1,12 @@
 import asyncio
 import libtorrent as lt
 import os
+import shutil
 from pathlib import Path
 import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
+import math
 
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,14 +18,9 @@ from jose import JWTError, jwt
 
 from base.models import Base, engine, SessionLocal, Session, User, SubscriptionLevel, FileRecord
 from base.seed import seed_data
-import logging
+
 # --- КОНФИГУРАЦИЯ ---
 from config.init import *
-
-
-
-
-logger = logging.getLogger("uvicorn.error")
 
 
 
@@ -614,8 +611,8 @@ async def delete_torrent(
     db: Session = Depends(get_db)
 ):
     """
-    Удаляет торрент из библиотеки текущего пользователя и корректирует его статистику,
-    если файл был ранее учтен в статистике загрузок.
+    Удаляет торрент из библиотеки текущего пользователя, корректирует статистику
+    и удаляет файл с диска, если он больше не используется никем другим.
     """
     # 1. Ищем запись, принадлежащую именно этому пользователю
     file_to_delete = db.query(FileRecord).filter(
@@ -629,23 +626,20 @@ async def delete_torrent(
             detail="Torrent not found in your library"
         )
 
+    # Сохраняем метаданные до удаления записи из БД
+    metadata = file_to_delete.metadata_json
+    if isinstance(metadata, str):
+        import json
+        metadata = json.loads(metadata)
+
     try:
-        # 2. Логика корректировки статистики
-        # Проверяем, был ли этот файл уже засчитан в статистику (через поле counted)
-        metadata = file_to_delete.metadata_json
-        if isinstance(metadata, str):
-            import json
-            metadata = json.loads(metadata)
-            
-        # Если файл был помечен как 'counted', значит он уже увеличил счетчики пользователя
+        # 2. Логика корректировки статистики пользователя
         if metadata and metadata.get("counted") is True:
             size_mb = metadata.get("size_mb", 0)
             
-            # Уменьшаем счетчик файлов (не позволяем уйти в минус)
             if user.downloaded_files_count > 0:
                 user.downloaded_files_count -= 1
             
-            # Уменьшаем общий объем (не позволяем уйти в минус)
             if user.total_downloaded_mb > size_mb:
                 user.total_downloaded_mb -= size_mb
             else:
@@ -653,10 +647,33 @@ async def delete_torrent(
             
             logger.info(f"Adjusted stats for user {user.email} due to file deletion.")
 
-        # 3. Удаляем саму запись из БД
+        # 3. Удаляем запись из БД
         db.delete(file_to_delete)
         db.commit()
         
+        # 4. Проверка: нужен ли файл кому-то еще?
+        # Ищем любые другие записи в БД с этим же хешем
+        remaining_records = db.query(FileRecord).filter(FileRecord.torrent_hash == torrent_hash).first()
+
+        if not remaining_records:
+            # Если записей больше нет, удаляем физический файл
+            file_name = metadata.get("name")
+            if file_name:
+                # Формируем путь (используем os.path.join для безопасности)
+                file_path = os.path.join(DOWNLOAD_DIR, file_name)
+                
+                try:
+                    if os.path.exists(file_path):
+                        if os.path.isdir(file_path):
+                            shutil.rmtree(file_path)  # Если это папка
+                        else:
+                            os.remove(file_path)     # Если это файл
+                        logger.info(f"Physical file deleted: {file_path}")
+                except Exception as e:
+                    # Мы не прерываем запрос пользователю, если не смогли удалить файл, 
+                    # но логируем это как ошибку системы
+                    logger.error(f"Failed to delete physical file {file_path}: {e}")
+
         logger.info(f"User {user.email} removed torrent {torrent_hash} from their library.")
         return {"status": "success", "message": "Torrent removed from your library and stats updated"}
     
@@ -769,6 +786,56 @@ async def add_level(
     db.commit()
     return {"status": "level created"}
 
+@app.delete("/admin/levels/{level_id}")
+async def admin_delete_level(level_id: int, db: Session = Depends(get_db), admin=Depends(admin_required)):
+    """
+    Удаление тарифа
+    """
+    level = db.query(SubscriptionLevel).get(level_id)
+    if not level:
+        raise HTTPException(status_code=404, detail="Level not found")
+    
+    # Проверка: нет ли пользователей на этом тарифе
+    users_on_level = db.query(User).filter(User.subscription_id == level_id).count()
+    if users_on_level > 0:
+        raise HTTPException(status_code=400, detail="Cannot delete level: users are still using it")
+        
+    db.delete(level)
+    db.commit()
+    return {"status": "level deleted"}
+
+@app.put("/admin/levels/{level_id}")
+async def admin_edit_level(
+    level_id: int, 
+    name: str = Form(...), 
+    mb_limit: float = Form(...), 
+    torrent_limit: int = Form(...), 
+    db: Session = Depends(get_db), 
+    admin=Depends(admin_required)
+):
+    """
+    Редактирование существующего тарифа
+    """
+    level = db.query(SubscriptionLevel).get(level_id)
+    if not level:
+        raise HTTPException(status_code=404, detail="Level not found")
+    
+    level.name = name
+    level.mb_limit = mb_limit
+    level.torrent_limit = torrent_limit
+    db.commit()
+    return {"status": "level updated"}
+
+@app.get("/subscribe/levels")
+async def admin_get_levels(db: Session = Depends(get_db)):
+    levels = db.query(SubscriptionLevel).all()
+    return [{
+        "id": l.id,
+        "name": l.name,
+        "mb_limit": l.mb_limit,
+        "torrent_limit": l.torrent_limit
+    } for l in levels]
+
 @app.patch("/admin/users/{user_id}/subscription")
 async def set_user_sub(user_id: int, level_id: int, db: Session = Depends(get_db), admin=Depends(admin_required)):
     user = db.query(User).get(user_id)
@@ -789,15 +856,85 @@ async def admin_get_users(db: Session = Depends(get_db), admin=Depends(admin_req
         "subscription_name": u.subscription.name if u.subscription else "None"
     } for u in users]
 
-@app.get("/subscribe/levels")
-async def admin_get_levels(db: Session = Depends(get_db)):
-    levels = db.query(SubscriptionLevel).all()
-    return [{
-        "id": l.id,
-        "name": l.name,
-        "mb_limit": l.mb_limit,
-        "torrent_limit": l.torrent_limit
-    } for l in levels]
+@app.delete("/admin/users/{user_id}")
+async def admin_delete_user(user_id: int, db: Session = Depends(get_db), admin=Depends(admin_required)):
+    """
+    Удаление пользователя
+    """
+    user = db.query(User).get(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Здесь можно добавить логику удаления всех FileRecord этого пользователя
+    db.delete(user)
+    db.commit()
+    return {"status": "user deleted"}
+
+@app.get("/admin/system/logs")
+async def admin_get_logs(
+    level: Optional[str] = None, 
+    limit: int = 100, 
+    db: Session = Depends(get_db), 
+    admin=Depends(admin_required)
+):
+    """
+    Читает файл логов. 
+    level: 'ERROR', 'WARNING', 'INFO'
+    """
+    log_file = "server_errors.log" # Убедитесь, что этот файл создается вашим логгером
+    if not os.path.exists(log_file):
+        return {"logs": []}
+
+    try:
+        with open(log_file, "r") as f:
+            lines = f.readlines()
+
+        # Берем последние N строк
+        lines = lines[-limit:]
+        
+        parsed_logs = []
+        for line in lines:
+            # Ожидаемый формат: 2023-10-27 10:00:00,000 - ERROR - Message
+            parts = line.split(" - ", 2)
+            if len(parts) < 3:
+                continue
+                
+            log_date_str = parts[0]
+            log_level = parts[1]
+            log_msg = parts[2].strip()
+
+            if level and level.upper() != log_level:
+                continue
+
+            parsed_logs.append({
+                "timestamp": log_date_str,
+                "level": log_level,
+                "message": log_msg
+            })
+
+        # Сортировка по дате (в обратном порядке, чтобы свежие были сверху)
+        parsed_logs.sort(key=lambda x: x["timestamp"], reverse=True)
+        
+        return {"logs": parsed_logs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read logs: {str(e)}")
+
+@app.get("/admin/system/disk")
+async def admin_get_disk_usage(admin=Depends(admin_required)):
+    """
+    Проверка свободного места на диске, где лежит DOWNLOAD_DIR
+    """
+    total, used, free = shutil.disk_usage(DOWNLOAD_DIR)
+    
+    return {
+        "path": os.path.abspath(DOWNLOAD_DIR),
+        "total_gb": round(total / (2**30), 2),
+        "used_gb": round(used / (2**30), 2),
+        "free_gb": round(free / (2**30), 2),
+        "percent_used": round((used / total) * 100, 2)
+    }
+
+
 
 @app.get("/auth/logout")
 async def logout():

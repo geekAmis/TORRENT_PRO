@@ -108,7 +108,7 @@ header {
 .btn-full { width: 100%; margin-top: 10px; }
 
 /* Инпуты и текст (защита от вылета за границы) */
-input[type="text"], input[type="file"] {
+input[type="text"], input[type="file"], input[type="number"] {
     width: 100%;
     max-width: 100%;
     background: #000;
@@ -117,6 +117,7 @@ input[type="text"], input[type="file"] {
     padding: 12px;
     font-family: inherit;
     outline: none;
+    margin-bottom: .3rem;
 }
 
 p, span, div, td, th, .glitch-text {
@@ -273,7 +274,7 @@ td {
     background: transparent;
     border: 1px solid var(--neon-cyan);
     color: var(--neon-cyan);
-    padding: 4px;
+    padding: revert-rule;
     display: flex;
     align-items: center;
     justify-content: center;

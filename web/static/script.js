@@ -254,29 +254,23 @@ async function updateDownloads() {
                 tbody.append(row);
             }
 
-            // --- ПРОВЕРКА: Если файл сейчас скачивается пользователем, НЕ трогаем его цифры ---
             if (row.getAttribute("data-downloading") === "true") {
-                // Мы обновляем только имя и статус, чтобы если файл переименовали, это отобразилось,
-                // но прогресс и скорость не перезаписываются данными с сервера.
                 row.querySelector(".file-name").textContent = torrent.name || file.name || hash;
                 row.querySelector(".file-state").textContent = torrent.state || "idle";
                 continue; 
             }
 
-            // 1. Name & State
             row.querySelector(".file-name").textContent = torrent.name || file.name || hash;
             row.querySelector(".file-name").style.cssText = "font-size:.8rem;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
             row.querySelector(".file-state").textContent = torrent.state || "idle";
             row.querySelector(".file-state").style.cssText = "font-size:.6rem;color:var(--border)";
 
-            // 2. Progress
             const progText = row.querySelector(".progress-text");
             const progFill = row.querySelector(".progress-fill");
             progText.textContent = `${progress.toFixed(2)}%`;
             progFill.style.width = `${progress}%`;
             progText.style.fontSize = ".7rem";
 
-            // 3. Speed
             const speedVal = row.querySelector(".speed-val");
             const newSpeed = `↓ ${Number(torrent.download_rate_kb || 0).toFixed(2)} KB/s`;
             if (speedVal.textContent !== newSpeed) {
@@ -285,28 +279,27 @@ async function updateDownloads() {
             }
             speedVal.style.fontSize = ".7rem";
 
-            // 4. Peers & Button
             const peersContainer = row.querySelector(".peers-container");
             const isFinished = progress >= 100;
 
             if (isFinished) {
-                // Проверяем, не отрисовали ли мы кнопки уже (чтобы не дублировать при поллинге)
-                if (!peersContainer.querySelector(".btn-magenta")) {
+                // Проверяем, не отрисовали ли мы кнопки уже
+                if (!peersContainer.querySelector(".btn-actions-group")) {
                     peersContainer.innerHTML = '';
                     
-                    // Контейнер для кнопок, чтобы они стояли в ряд
                     const actionsWrapper = document.createElement("div");
+                    actionsWrapper.className = "btn-actions-group"; // Группируем кнопки
                     actionsWrapper.style.cssText = "display:flex; gap:5px; align-items:center;";
 
                     // 1. Кнопка Download
                     const dlBtn = document.createElement("button");
                     dlBtn.className = "btn btn-sm btn-magenta";
-                    dlBtn.textContent = "Download";
+                    dlBtn.textContent = "DL";
                     dlBtn.onclick = () => downloadFile(hash);
 
                     // 2. Кнопка Share
                     const shareBtn = document.createElement("button");
-                    shareBtn.className = "btn btn-sm btn-share"; // Новый класс
+                    shareBtn.className = "btn btn-sm btn-share";
                     shareBtn.innerHTML = `
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
@@ -316,8 +309,21 @@ async function updateDownloads() {
                     shareBtn.title = "Share link";
                     shareBtn.onclick = () => shareFileLink(hash);
 
+                    // 3. Кнопка DELETE (Корзина)
+                    const delBtn = document.createElement("button");
+                    delBtn.className = "btn btn-sm btn-delete"; 
+                    delBtn.style.cssText = "color: #ff4d4d; border-color: #ff4d4d; background: transparent;";
+                    delBtn.innerHTML = `
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>`;
+                    delBtn.title = "Delete from library";
+                    delBtn.onclick = () => deleteTorrent(hash);
+
                     actionsWrapper.appendChild(dlBtn);
                     actionsWrapper.appendChild(shareBtn);
+                    actionsWrapper.appendChild(delBtn);
                     peersContainer.appendChild(actionsWrapper);
                 }
             } else {
@@ -359,6 +365,84 @@ async function shareFileLink(hash) {
     } catch (err) {
         console.error("Error sharing:", err);
     }
+}
+
+async function deleteTorrent(hash) {
+    // 1. Подтверждение действия пользователем
+    const confirmDelete = confirm("Вы уверены, что хотите удалить этот файл из своей библиотеки? Это не удалит файл с сервера, но уберет его из вашего списка.");
+    if (!confirmDelete) return;
+
+    // Находим строку, чтобы визуально ее пометить
+    const row = document.querySelector(`tr[data-hash="${hash}"]`);
+    const originalOpacity = row ? row.style.opacity : "";
+
+    try {
+        if (row) row.style.opacity = "0.5"; // Визуальный эффект "удаления"
+
+        // 2. Вызов API (используем метод DELETE)
+        const response = await apiFetch(`/torrent/delete/${encodeURIComponent(hash)}`, {
+            method: "DELETE"
+        });
+
+        const result = await response.json();
+
+        // 3. Успешное удаление
+        showToast(result.message || "Файл удален");
+        
+        // Принудительно обновляем список, чтобы статистика и таблица синхронизировались
+        await updateDownloads();
+
+    } catch (err) {
+        // 4. Обработка ошибок
+        console.error("Delete error:", err);
+        
+        let errorMessage = "Не удалось удалить файл";
+        
+        // Если ошибка пришла от сервера в формате JSON
+        if (err.message && err.message.includes("HTTP")) {
+             // Здесь можно добавить более сложную логику парсинга, 
+             // если apiFetch не прокидывает detail напрямую
+             errorMessage = err.message;
+        } else if (err.message) {
+            errorMessage = err.message;
+        }
+
+        // Выводим уведомление об ошибке (красным цветом)
+        showErrorToast(`Ошибка: ${errorMessage}`);
+        
+        // Возвращаем прозрачность, если произошла ошибка
+        if (row) row.style.opacity = originalOpacity;
+    }
+}
+
+// Расширенная функция для уведомлений об ошибках
+function showErrorToast(message) {
+    let toast = document.getElementById('toast-notification');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'toast-notification';
+        toast.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #ff4d4d;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            z-index: 10000;
+            box-shadow: 0 0 15px #ff4d4d;
+            font-family: 'Orbitron', sans-serif;
+        `;
+        document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.style.display = 'block';
+    
+    setTimeout(() => {
+        toast.style.display = 'none';
+    }, 3000);
 }
 
 // Вспомогательная функция для уведомления

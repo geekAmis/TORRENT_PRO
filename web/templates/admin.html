@@ -12,32 +12,61 @@
     <div class="container">
         <header>
             <h1 class="glitch">ADMIN CONTROL</h1>
-            <button class="btn" onclick="window.location.href='/'">Back to Dashboard</button>
+            <div class="header-actions">
+                <button class="btn" onclick="refreshAll()">Refresh Data</button>
+                <button class="btn" onclick="window.location.href='/'">Back to Dashboard</button>
+            </div>
         </header>
 
         <div class="dashboard-grid">
             
-            <!-- Секция создания уровня -->
+            <!-- СЕКЦИЯ МОНИТОРИНГА СИСТЕМЫ -->
             <div class="card">
                 <div class="card-header">
-                    <h3>Create New Level</h3>
+                    <h3 class="card-header-title">System Monitor</h3>
                 </div>
-                <div class="input-group">
-                    <input type="text" id="lvl-name" placeholder="Level Name (e.g. VIP)">
+                <div id="disk-info" class="info-box" style="margin-bottom: 20px; padding: 10px; border: 1px solid var(--border);">
+                    <!-- Диск загрузится сюда -->
+                    Loading disk info...
                 </div>
-                <div class="input-group">
-                    <input type="number" id="lvl-mb" placeholder="MB Limit" style="width:100%; background:#000; border:1px solid var(--border); color:var(--neon-cyan); padding:12px; font-family:inherit; outline:none;">
+                <div class="card-header">
+                    <h3 class="card-header-title">Server Logs</h3>
                 </div>
-                <div class="input-group">
-                    <input type="number" id="lvl-torrent" placeholder="Torrent Limit" style="width:100%; background:#000; border:1px solid var(--border); color:var(--neon-cyan); padding:12px; font-family:inherit; outline:none;">
+                <div class="log-controls" style="display: flex; gap: 5px; margin-bottom: 10px;">
+                    <select id="log-level-filter" class="btn btn-sm" style="padding: 2px 5px; font-size: 0.6rem;">
+                        <option value="">All Levels</option>
+                        <option value="ERROR">Error</option>
+                        <option value="WARNING">Warning</option>
+                        <option value="INFO">Info</option>
+                    </select>
+                    <button class="btn btn-sm btn-magenta" onclick="loadLogs()">Refresh Logs</button>
                 </div>
-                <button class="btn btn-full" onclick="createLevel()">Create Level</button>
+                <div id="logs-container" class="logs-view" style="height: 200px; overflow-y: auto; background: #000; font-size: 0.7rem; padding: 10px; border: 1px solid var(--border); font-family: 'JetBrains Mono';">
+                    <!-- Логи загрузятся сюда -->
+                </div>
             </div>
 
-            <!-- Список пользователей -->
+            <!-- СЕКЦИЯ СОЗДАНИЯ И РЕДАКТИРОВАНИЯ ТАРИФОВ -->
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-header-title">Manage Levels</h3>
+                </div>
+                <div class="input-group">
+                    <input type="text" id="lvl-name" placeholder="Level Name">
+                </div>
+                <div class="input-group">
+                    <input type="number" id="lvl-mb" placeholder="MB Limit">
+                </div>
+                <div class="input-group">
+                    <input type="number" id="lvl-torrent" placeholder="Torrent Limit">
+                </div>
+                <button class="btn btn-full" onclick="createLevel()">Create New Level</button>
+            </div>
+
+            <!-- СПИСОК ПОЛЬЗОВАТЕЛЕЙ -->
             <div class="card" style="grid-column: span 2;">
                 <div class="card-header">
-                    <h3>User Management</h3>
+                    <h3 class="card-header-title">User Management</h3>
                 </div>
                 <div class="table-responsive">
                     <table>
@@ -50,17 +79,15 @@
                                 <th>Actions</th>
                             </tr>
                         </thead>
-                        <tbody id="users-table-body">
-                            <!-- Загружается через JS -->
-                        </tbody>
+                        <tbody id="users-table-body"></tbody>
                     </table>
                 </div>
             </div>
 
-            <!-- Список уровней -->
+            <!-- СПИСОК ТАРИФОВ -->
             <div class="card" style="grid-column: span 2;">
                 <div class="card-header">
-                    <h3>Subscription Levels</h3>
+                    <h3 class="card-header-title">Subscription Levels</h3>
                 </div>
                 <div class="table-responsive">
                     <table>
@@ -69,11 +96,10 @@
                                 <th>Name</th>
                                 <th>MB Limit</th>
                                 <th>Torrent Limit</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
-                        <tbody id="levels-table-body">
-                            <!-- Загружается через JS -->
-                        </tbody>
+                        <tbody id="levels-table-body"></tbody>
                     </table>
                 </div>
             </div>
@@ -81,13 +107,25 @@
         </div>
     </div>
 
-    <!-- Модальное окно смены подписки (упрощенно) -->
+    <!-- МОДАЛКА СМЕНЫ ПОДПИСКИ -->
     <div id="sub-modal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:var(--panel); border:2px solid var(--neon-cyan); padding:30px; z-index:100; box-shadow: 0 0 50px #000;">
-        <h3>Assign Subscription</h3>
-        <p id="modal-user-email" style="color:var(--neon-magenta); font-size:0.8rem;"></p>
-        <div id="levels-select-container" style="margin: 20px 0;"></div>
+        <h3 class="card-header-title">Assign Subscription</h3>
+        <p id="modal-user-email" style="color:var(--neon-magenta); font-size:0.8rem; margin-bottom: 15px;"></p>
+        <div id="levels-select-container" style="margin: 20px 0; display: flex; flex-direction: column; gap: 10px;"></div>
         <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-magenta" id="confirm-sub-btn">Apply</button>
+    </div>
+
+    <!-- МОДАЛКА РЕДАКТИРОВАНИЯ ТАРИФА -->
+    <div id="edit-lvl-modal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:var(--panel); border:2px solid var(--neon-magenta); padding:30px; z-index:101; box-shadow: 0 0 50px #000;">
+        <h3 class="card-header-title">Edit Level</h3>
+        <input type="hidden" id="edit-lvl-id">
+        <div class="input-group"><input type="text" id="edit-lvl-name" placeholder="Name"></div>
+        <div class="input-group"><input type="number" id="edit-lvl-mb" placeholder="MB Limit"></div>
+        <div class="input-group"><input type="number" id="edit-lvl-torrent" placeholder="Torrent Limit"></div>
+        <div style="display:flex; gap:10px; margin-top:20px;">
+            <button class="btn btn-magenta" onclick="saveLevelEdit()">Save</button>
+            <button class="btn" onclick="document.getElementById('edit-lvl-modal').style.display='none'">Cancel</button>
+        </div>
     </div>
 
     <script src="/static/admin.js"></script>
