@@ -607,7 +607,63 @@ async def add_magnet(
     return {"status": "started", "hash": info_hash}
 
 
+@app.delete("/torrent/delete/{torrent_hash}")
+async def delete_torrent(
+    torrent_hash: str, 
+    user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """
+    Удаляет торрент из библиотеки текущего пользователя и корректирует его статистику,
+    если файл был ранее учтен в статистике загрузок.
+    """
+    # 1. Ищем запись, принадлежащую именно этому пользователю
+    file_to_delete = db.query(FileRecord).filter(
+        FileRecord.torrent_hash == torrent_hash,
+        FileRecord.user_id == user.id
+    ).first()
 
+    if not file_to_delete:
+        raise HTTPException(
+            status_code=404, 
+            detail="Torrent not found in your library"
+        )
+
+    try:
+        # 2. Логика корректировки статистики
+        # Проверяем, был ли этот файл уже засчитан в статистику (через поле counted)
+        metadata = file_to_delete.metadata_json
+        if isinstance(metadata, str):
+            import json
+            metadata = json.loads(metadata)
+            
+        # Если файл был помечен как 'counted', значит он уже увеличил счетчики пользователя
+        if metadata and metadata.get("counted") is True:
+            size_mb = metadata.get("size_mb", 0)
+            
+            # Уменьшаем счетчик файлов (не позволяем уйти в минус)
+            if user.downloaded_files_count > 0:
+                user.downloaded_files_count -= 1
+            
+            # Уменьшаем общий объем (не позволяем уйти в минус)
+            if user.total_downloaded_mb > size_mb:
+                user.total_downloaded_mb -= size_mb
+            else:
+                user.total_downloaded_mb = 0.0
+            
+            logger.info(f"Adjusted stats for user {user.email} due to file deletion.")
+
+        # 3. Удаляем саму запись из БД
+        db.delete(file_to_delete)
+        db.commit()
+        
+        logger.info(f"User {user.email} removed torrent {torrent_hash} from their library.")
+        return {"status": "success", "message": "Torrent removed from your library and stats updated"}
+    
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting torrent: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete torrent")
 
 @app.get("/torrent/download/{torrent_hash}")
 async def download_file(torrent_hash: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
