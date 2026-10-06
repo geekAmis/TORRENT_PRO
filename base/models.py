@@ -42,7 +42,7 @@ class FileRecord(Base):
     download_url = Column(String, nullable=False)
     torrent_hash = Column(String, nullable=True, index=True)
     magnet_uri = Column(String, nullable=True) # КРИТИЧНО для восстановления сессии
-
+    original_file_path = Column(String, nullable=True) # КРИТИЧНО для восстановления сессии
     user = relationship("User", back_populates="files")
 
 
