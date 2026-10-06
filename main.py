@@ -2,30 +2,33 @@ import asyncio
 import libtorrent as lt
 import os
 import shutil
-from pathlib import Path
 import time
+import math
+import uuid
+
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
-import math
 
 from starlette.middleware.sessions import SessionMiddleware
+from authlib.integrations.starlette_client import OAuth
+from jose import JWTError, jwt
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Depends, HTTPException, Request, status, UploadFile, File, Form
 from fastapi.responses import RedirectResponse, JSONResponse, FileResponse
 
-from authlib.integrations.starlette_client import OAuth
-from jose import JWTError, jwt
+
+# --- КОНФИГУРАЦИЯ ---
 
 from base.models import Base, engine, SessionLocal, Session, User, SubscriptionLevel, FileRecord
 from base.seed import seed_data
-
-# --- КОНФИГУРАЦИЯ ---
 from config.init import *
 
 
 
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+os.makedirs(TORRENT_DIR, exist_ok=True)
 
 app = FastAPI(title="Torrent Pro API")
 
@@ -124,40 +127,88 @@ def admin_required(user: User = Depends(get_current_user)):
 
 async def resume_downloads_on_startup(db_factory):
     """
-    При старте сервера: ищем в БД торренты, которые не завершены, и запускаем их.
+    При старте сервера: ищем в БД незавершенные торренты и запускаем их.
+    Приоритет: использование сохраненного .torrent файла -> использование magnet-ссылки.
     """
     db = db_factory()
     try:
-        # Ищем торренты, которые не помечены как 'counted' (завершенные)
-        incomplete_torrents = db.query(FileRecord).filter(
-            FileRecord.torrent_hash.isnot(None),
-            FileRecord.metadata_json["counted"] == False
-        ).all()
+
+        all_records = db.query(FileRecord).filter(FileRecord.torrent_hash.isnot(None)).all()
+        
+        incomplete_torrents = [
+            r for r in all_records 
+            if r.metadata_json.get("state") in ["downloading", "idle", "checking"] 
+            and not r.metadata_json.get("counted", False)
+        ]
+
+        logger.info(f"{incomplete_torrents} {all_records}")
+        for rec in all_records:
+            logger.info(rec.metadata_json["state"])
 
         for rec in incomplete_torrents:
-            logger.info(f"Resuming torrent: {rec.metadata_json.get('name')}")
+            info_hash = rec.torrent_hash
             
-            params = lt.add_torrent_params()
-            params.save_path = DOWNLOAD_DIR
-            
-            if rec.magnet_uri:
-                params = lt.parse_magnet_uri(rec.magnet_uri)
-                params.save_path = DOWNLOAD_DIR
-                handle = ses.add_torrent(params)
-                # Ждем метаданные
-                for _ in range(30):
-                    if handle.has_metadata(): break
-                    await asyncio.sleep(1)
-            else:
-                # Если нет magnet, пробуем восстановить через хеш (нужен файл .torrent или resume_data)
-                # В идеале всегда сохраняйте magnet_uri в БД
+            # Пропускаем, если этот торрент уже запущен в активных загрузках
+            if info_hash in active_downloads:
+                logger.info(f"Torrent {info_hash} is already running. Skipping.")
                 continue
 
-            if handle.has_metadata():
-                info_hash = str(handle.info_hash())
-                if info_hash not in active_downloads:
+            handle = None
+            params = lt.add_torrent_params()
+            params.save_path = os.path.abspath(DOWNLOAD_DIR)
+
+            # --- ПРИОРИТЕТ 1: Загрузка из сохраненного .torrent файла ---
+            if rec.original_file_path and os.path.exists(rec.original_file_path):
+                try:
+                    logger.info(f"Resuming {rec.metadata_json.get('name')} via saved file: {rec.original_file_path}")
+                    info = lt.torrent_info(rec.original_file_path)
+                    params.ti = info
+                    handle = ses.add_torrent(params)
+                except Exception as e:
+                    logger.error(f"Failed to load torrent file {rec.original_file_path}: {e}")
+            
+            # --- ПРИОРИТЕТ 2: Загрузка через Magnet-ссылку (если файла нет) ---
+            elif rec.magnet_uri:
+                try:
+                    logger.info(f"Resuming {rec.metadata_json.get('name')} via magnet link")
+                    params = lt.parse_magnet_uri(rec.magnet_uri)
+                    params.save_path = os.path.abspath(DOWNLOAD_DIR)
+                    handle = ses.add_torrent(params)
+                    
+                    # Ждем метаданные (важно для magnet-ссылок)
+                    metadata_acquired = False
+                    for _ in range(60):  # Увеличил до 60 секунд для надежности
+                        if handle.has_metadata():
+                            metadata_acquired = True
+                            break
+                        await asyncio.sleep(1)
+                    
+                    if not metadata_acquired:
+                        logger.warning(f"Metadata timeout for magnet: {rec.magnet_uri}")
+                        ses.remove_torrent(handle)
+                        handle = None
+                except Exception as e:
+                    logger.error(f"Failed to parse magnet URI: {e}")
+                    handle = None
+
+            # --- ЗАПУСК МОНИТОРА ---
+            if handle:
+                # Проверяем хеш еще раз после загрузки (особенно для magnet)
+                current_hash = str(handle.info_hash())
+                
+                # Если хеш совпал с тем, что в базе (важно для magnet)
+                if current_hash == info_hash:
+                    logger.info(f"Successfully resumed torrent: {current_hash}")
                     task = asyncio.create_task(torrent_monitor(handle, db_factory, rec.user.email))
-                    active_downloads[info_hash] = task
+                    active_downloads[current_hash] = task
+                else:
+                    logger.error(f"Hash mismatch! DB: {info_hash}, Loaded: {current_hash}")
+                    if handle: ses.remove_torrent(handle)
+            else:
+                logger.error(f"Could not resume torrent {info_hash}. No valid file or magnet link.")
+
+    except Exception as e:
+        logger.error(f"Critical error in resume_downloads_on_startup: {e}", exc_info=True)
     finally:
         db.close()
 
@@ -170,6 +221,7 @@ async def torrent_monitor(handle, db_factory, user_email: str):
             try:
                 s = handle.status()
             except: 
+                logger.warning(f"Handle status check failed for {info_hash}: {e}")
                 break
 
             # Ищем ВСЕ записи в БД с этим хешем (для всех пользователей)
@@ -194,6 +246,8 @@ async def torrent_monitor(handle, db_factory, user_email: str):
                     if (s.is_seeding or s.progress >= 0.999) and not new_metadata.get("counted"):
                         # Здесь можно добавить проверку: если это файл, который мы "учитываем"
                         # (например, если он был добавлен как новый, а не общий)
+                        # да я просто хуй его знает как тут чё писать... 
+                        # походу хуйца забью или попрошу нейронку. Рот ебал.
                         pass 
 
                 db.commit()
@@ -213,6 +267,7 @@ async def torrent_monitor(handle, db_factory, user_email: str):
                             meta = dict(rec.metadata_json)
                             meta["counted"] = True
                             rec.metadata_json = meta
+                            logger.info(f"Torrent {info_hash} completed. Stats updated for user {user.email}. Size: {size_mb}MB")
                 db.commit()
                 
                 if s.is_seeding: break 
@@ -220,61 +275,10 @@ async def torrent_monitor(handle, db_factory, user_email: str):
             await asyncio.sleep(3)
     except Exception as e:
         logger.error(f"Monitor error [{info_hash}]: {e}")
+        logger.error(f"CRITICAL: Monitor loop crashed for {info_hash}: {e}", exc_info=True)
     finally:
         db.close()
 
-async def old_torrent_monitor(handle, db_factory, user_email: str):
-    """
-    Циклический монитор: обновляет прогресс и состояние в БД.
-    """
-    info_hash = str(handle.info_hash())
-    db = db_factory()
-    try:
-        while True:
-            try:
-                s = handle.status()
-            except: 
-                break
-
-            # 1. Обновляем данные в БД
-            file_rec = db.query(FileRecord).filter(FileRecord.torrent_hash == info_hash).first()
-            if file_rec:
-                # Обновляем JSON с актуальным прогрессом
-                new_metadata = dict(file_rec.metadata_json)
-                new_metadata.update({
-                    "name": s.name,
-                    "progress": round(s.progress * 100, 2),
-                    "download_rate_kb": round(s.download_rate / 1024, 2),
-                    "upload_rate_kb": round(s.upload_rate / 1024, 2),
-                    "peers": s.num_peers,
-                    "state": str(s.state),
-                    "downloaded_bytes": s.total_wanted_done,
-                    "total_bytes": s.total_wanted,
-                })
-                file_rec.metadata_json = new_metadata
-                db.commit()
-
-            # 2. Если торрент докачан (Seeding) - начисляем статистику
-            if s.is_seeding or s.progress >= 0.999:
-                user = db.query(User).filter(User.email == user_email).first()
-                if user and file_rec and not file_rec.metadata_json.get("counted"):
-                    size_mb = file_rec.metadata_json.get("size_mb", 0)
-                    user.downloaded_files_count += 1
-                    user.total_downloaded_mb += size_mb
-                    
-                    # Помечаем, что файл учтен
-                    meta = dict(file_rec.metadata_json)
-                    meta["counted"] = True
-                    file_rec.metadata_json = meta
-                    db.commit()
-                
-                if s.is_seeding: break # Выходим из мониторинга, если только сидим
-
-            await asyncio.sleep(3)
-    except Exception as e:
-        logger.error(f"Monitor error [{info_hash}]: {e}")
-    finally:
-        db.close()
 
 # --- ENDPOINTS ---
 
@@ -349,92 +353,73 @@ async def add_torrent_file(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # 1. Проверка лимита торрентов
     if user.subscription and len(active_downloads) >= user.subscription.torrent_limit:
         raise HTTPException(status_code=403, detail="Torrent limit reached")
 
-    temp_path = f"temp_{file.filename}"
+    temp_path = f"temp_{uuid.uuid4()}_{file.filename}"
     try:
         content = await file.read()
         with open(temp_path, "wb") as f:
             f.write(content)
         
-        info = lt.torrent_info(temp_path)
-        
-        # --- ИСПРАВЛЕНИЕ "Unknown" ---
-        # Извлекаем имя торрента (это имя папки или файла внутри)
-        torrent_name = info.name()
-        
-        # 2. Извлекаем размер (число)
-        # Проверяем: если total_size это метод, вызываем его. Если нет - берем как есть.
-        if callable(info.total_size):
-            size_bytes = info.total_size()
-        else:
-            size_bytes = info.total_size
+        # --- СОХРАНЕНИЕ ОРИГИНАЛА СО СЛУЧАЙНЫМ ИМЕНЕМ ---
+        original_filename = f"{uuid.uuid4()}.torrent"
+        original_save_path = os.path.join(TORRENT_DIR, original_filename)
+        shutil.copy(temp_path, original_save_path)
+        # -----------------------------------------------
 
-        # Конвертируем в МБ (число)
+        info = lt.torrent_info(temp_path)
+        torrent_name = info.name()
+        size_bytes = info.total_size() if callable(info.total_size) else info.total_size
         size_mb = size_bytes / (1024 * 1024)
 
-        # 3. Формируем чистый словарь (только строки и числа)
         metadata = {
             "type": "torrent", 
-            "size_mb": float(size_mb), # Явно приводим к float
-            "name": str(torrent_name)  # Явно приводим к str
+            "size_mb": float(size_mb), 
+            "name": str(torrent_name)
         }
-        # ----------------------------------------------
 
-        # Далее ваш код...
         params = lt.add_torrent_params()
         params.save_path = os.path.abspath(DOWNLOAD_DIR)
         params.ti = info
 
         handle = ses.add_torrent(params)
         info_hash = str(handle.info_hash())
-
-        # Теперь используем подготовленный metadata
+        
         existing_file = db.query(FileRecord).filter(FileRecord.torrent_hash == info_hash).first()
         
         if existing_file:
             if existing_file.user_id == user.id:
                 return {"status": "already_exists", "hash": info_hash}
             else:
-                # Создаем расширенную метадату, чтобы монитор сразу видел структуру
                 extended_metadata = metadata.copy()
-                extended_metadata.update({
-                    "progress": 0,
-                    "state": "idle",
-                    "download_rate_kb": 0,
-                    "upload_rate_kb": 0,
-                    "peers": 0,
-                    "counted": False
-                })
+                extended_metadata.update({"progress": 0, "state": "idle", "download_rate_kb": 0, "upload_rate_kb": 0, "peers": 0, "counted": False})
                 
                 new_user_file = FileRecord(
                     token_name=f"u{user.id}_{info_hash[:8]}",
                     storage_path=DOWNLOAD_DIR,
                     user_id=user.id,
-                    metadata_json=extended_metadata, # Используем расширенную метадату
+                    metadata_json=extended_metadata,
                     download_url=f"/torrent/download/{info_hash}",
-                    torrent_hash=info_hash
+                    torrent_hash=info_hash,
+                    original_file_path=original_save_path # ЗАПИСЬ ПУТИ
                 )
                 db.add(new_user_file)
                 db.commit()
                 
-                # Важно: если файл уже качается/раздается, монитор уже запущен.
-                # Если нет - запускаем.
                 if info_hash not in active_downloads:
                     asyncio.create_task(torrent_monitor(handle, SessionLocal, user.email))
-
                 return {"status": "shared_from_library", "hash": info_hash}
 
-        # --- ЕСЛИ ФАЙЛА НЕТ ВООБЩЕ (НОВЫЙ) ---
+        # --- НОВЫЙ ФАЙЛ ---
         new_file = FileRecord(
             token_name=f"u{user.id}_{info_hash[:8]}",
             storage_path=DOWNLOAD_DIR,
             user_id=user.id,
-            metadata_json=metadata, # Используем подготовленные метаданные
+            metadata_json=metadata,
             download_url=f"/torrent/download/{info_hash}",
-            torrent_hash=info_hash
+            torrent_hash=info_hash,
+            original_file_path=original_save_path # ЗАПИСЬ ПУТИ
         )
         db.add(new_file)
         db.commit()
@@ -445,109 +430,12 @@ async def add_torrent_file(
         return {"status": "started", "hash": info_hash, "added_by": user.email}
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Failed to add torrent file for {user.email}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to process torrent file: {str(e)}")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-@app.post("/old/torrent/file")
-async def old_add_torrent_file(
-    file: UploadFile = File(...), 
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    # 1. Проверка лимита торрентов
-    if user.subscription and len(active_downloads) >= user.subscription.torrent_limit:
-        raise HTTPException(status_code=403, detail="Torrent limit reached")
-
-    temp_path = f"temp_{file.filename}"
-    try:
-        content = await file.read()
-        with open(temp_path, "wb") as f:
-            f.write(content)
-        
-        info = lt.torrent_info(temp_path)
-        
-        if callable(info.total_size):
-            total_size_bytes = info.total_size()
-        else:
-            total_size_bytes = info.total_size
-
-        params = lt.add_torrent_params()
-        params.save_path = os.path.abspath(DOWNLOAD_DIR)
-        params.ti = info
-
-        # Добавляем в сессию libtorrent (чтобы он начал раздавать/качать)
-        handle = ses.add_torrent(params)
-        info_hash = str(handle.info_hash())
-
-        # 3. РЕАЛИЗАЦИЯ ТВОЕЙ ЛОГИКИ:
-        # Ищем файл в базе по хешу
-        existing_file = db.query(FileRecord).filter(FileRecord.torrent_hash == info_hash).first()
-        
-        if existing_file:
-            # ПРОВЕРКА: Этот файл уже принадлежит этому пользователю?
-            if existing_file.user_id == user.id:
-                return {
-                    "status": "already_exists", 
-                    "hash": info_hash, 
-                    "message": "Torrent is already in your library"
-                }
-            else:
-                # ФАЙЛ ЕСТЬ, НО У ДРУГОГО ПОЛЬЗОВАТЕЛЯ.
-                # Создаем "ссылку" на этот файл для текущего пользователя.
-                new_user_file = FileRecord(
-                    token_name=f"user_{user.id}_torrent_{info_hash[:8]}",
-                    storage_path=DOWNLOAD_DIR,
-                    user_id=user.id,  # Привязываем к текущему юзеру!
-                    metadata_json={
-                        "type": "torrent", 
-                        "size_mb": total_size_bytes / (1024 * 1024)
-                    },
-                    download_url=f"/torrent/download/{info_hash}",
-                    torrent_hash=info_hash
-                )
-                db.add(new_user_file)
-                db.commit()
-                
-                # Запускаем монитор, если этот хеш еще не обрабатывается
-                if info_hash not in active_downloads:
-                    asyncio.create_task(torrent_monitor(handle, SessionLocal, user.email))
-
-                return {
-                    "status": "shared_from_library", 
-                    "hash": info_hash, 
-                    "message": "File added to your library from global storage"
-                }
-
-        # --- ЕСЛИ ФАЙЛА НЕТ ВООБЩЕ (НОВЫЙ) ---
-        new_file = FileRecord(
-            token_name=f"user_{user.id}_torrent_{info_hash[:8]}",
-            storage_path=DOWNLOAD_DIR,
-            user_id=user.id,
-            metadata_json={
-                "type": "torrent", 
-                "size_mb": total_size_bytes / (1024 * 1024)
-            },
-            download_url=f"/torrent/download/{info_hash}",
-            torrent_hash=info_hash
-        )
-        db.add(new_file)
-        db.commit()
-
-        if info_hash not in active_downloads:
-            asyncio.create_task(torrent_monitor(handle, SessionLocal, user.email))
-        
-        return {"status": "started", "hash": info_hash, "added_by": user.email}
-
-    except Exception as e:
-        # ... (оставь свой traceback)
-        raise HTTPException(status_code=500, detail=f"Failed to process torrent file: {str(e)}")
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
 
 @app.post("/torrent/magnet")
 async def add_magnet(
@@ -555,7 +443,6 @@ async def add_magnet(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # 1. Проверка лимитов по подписке
     current_count = db.query(FileRecord).filter(FileRecord.user_id == user.id).count()
     if user.subscription and current_count >= user.subscription.torrent_limit:
         raise HTTPException(status_code=403, detail="Torrent limit reached")
@@ -564,7 +451,6 @@ async def add_magnet(
     params.save_path = os.path.abspath(DOWNLOAD_DIR)
     handle = ses.add_torrent(params)
 
-    # 2. Ожидание метаданных
     for _ in range(60):
         if handle.has_metadata(): break
         await asyncio.sleep(1)
@@ -575,17 +461,24 @@ async def add_magnet(
     info = handle.get_torrent_info()
     info_hash = str(handle.info_hash())
     
-    # 3. Регистрация в БД
     if db.query(FileRecord).filter(FileRecord.torrent_hash == info_hash).first():
         return {"status": "already_exists", "hash": info_hash}
+
+    # --- СОХРАНЕНИЕ MAGNET ССЫЛКИ В .MAGNET ФАЙЛ ---
+    magnet_filename = f"{uuid.uuid4()}.magnet"
+    magnet_save_path = os.path.join(TORRENT_DIR, magnet_filename)
+    with open(magnet_save_path, "w") as f:
+        f.write(magnet)
+    # -----------------------------------------------
 
     new_file = FileRecord(
         user_id=user.id,
         token_name=f"user_{user.id}_torrent_{info_hash[:8]}",
         storage_path=DOWNLOAD_DIR,
-        magnet_uri=magnet, # Сохраняем для авто-рестарта
+        magnet_uri=magnet,
         torrent_hash=info_hash,
         download_url=f"/torrent/download/{info_hash}",
+        original_file_path=magnet_save_path, # ЗАПИСЬ ПУТИ К .MAGNET
         metadata_json={
             "type": "torrent",
             "name": info.name,
@@ -597,7 +490,6 @@ async def add_magnet(
     db.add(new_file)
     db.commit()
 
-    # 4. Запуск монитора
     task = asyncio.create_task(torrent_monitor(handle, SessionLocal, user.email))
     active_downloads[info_hash] = task
 
@@ -621,6 +513,7 @@ async def delete_torrent(
     ).first()
 
     if not file_to_delete:
+        logger.warning(f"User {user.email} tried to delete non-existent torrent {torrent_hash}")
         raise HTTPException(
             status_code=404, 
             detail="Torrent not found in your library"
@@ -644,8 +537,9 @@ async def delete_torrent(
                 user.total_downloaded_mb -= size_mb
             else:
                 user.total_downloaded_mb = 0.0
-            
-            logger.info(f"Adjusted stats for user {user.email} due to file deletion.")
+
+            logger.info(f"Stats reverted for {user.email} after deleting counted file {torrent_hash}")
+
 
         # 3. Удаляем запись из БД
         db.delete(file_to_delete)
@@ -668,11 +562,11 @@ async def delete_torrent(
                             shutil.rmtree(file_path)  # Если это папка
                         else:
                             os.remove(file_path)     # Если это файл
+
                         logger.info(f"Physical file deleted: {file_path}")
                 except Exception as e:
-                    # Мы не прерываем запрос пользователю, если не смогли удалить файл, 
-                    # но логируем это как ошибку системы
-                    logger.error(f"Failed to delete physical file {file_path}: {e}")
+                    logger.error(f"SYSTEM ERROR: Failed to delete physical file {file_path}: {e}")
+
 
         logger.info(f"User {user.email} removed torrent {torrent_hash} from their library.")
         return {"status": "success", "message": "Torrent removed from your library and stats updated"}
@@ -784,6 +678,8 @@ async def add_level(
     new_level = SubscriptionLevel(name=name, mb_limit=mb_limit, torrent_limit=torrent_limit)
     db.add(new_level)
     db.commit()
+    logger.info(f"ADMIN ACTION: New level created: {name} (MB:{mb_limit}, Torrent:{torrent_limit})")
+
     return {"status": "level created"}
 
 @app.delete("/admin/levels/{level_id}")
@@ -798,6 +694,7 @@ async def admin_delete_level(level_id: int, db: Session = Depends(get_db), admin
     # Проверка: нет ли пользователей на этом тарифе
     users_on_level = db.query(User).filter(User.subscription_id == level_id).count()
     if users_on_level > 0:
+        logger.warning(f"ADMIN ATTEMPT: Failed to delete level {level_id} because {users_on_level} users are on it")
         raise HTTPException(status_code=400, detail="Cannot delete level: users are still using it")
         
     db.delete(level)
