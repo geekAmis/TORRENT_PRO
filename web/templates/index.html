@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <title>TORRENT PRO</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=JetBrains+Mono:wght@300;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="/static/styles.css">
+</head>
+<body class="dashboard-body">
+
+<div class="container">
+    <header>
+        <h1 class="glitch">TORRENT_PRO</h1>
+        <div id="auth-area">
+            <button class="btn" onclick="login()">[ LOGIN_WITH_GOOGLE ]</button>
+        </div>
+    </header>
+
+    <main id="dashboard" class="hidden">
+        <!-- Сетка, где sidebar и main-content — это прямые потомки -->
+        <div class="dashboard-grid">
+            
+            <!-- Левая колонка (Sidebar) -->
+            <aside class="sidebar">
+                <div class="card profile-card">
+                    <h3 class="card-header-title">User_Profile</h3>
+                    <div id="profile-info">
+                        <div class="avatar">
+                            <img id="user-avatar-img" src="" alt="Avatar" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;" class="hidden">
+                            <div id="avatar-placeholder" style="width: 100%; height: 100%; background: #333; border-radius: 50%;"></div>
+                        </div>
+                        <div class="profile-details-mini">
+                            <span id="user-email" class="glitch-text" data-target="loading...">loading...</span>
+                            <span id="user-stats" class="glitch-text" data-target="loading..." style="font-size: 0.7rem; opacity: 0.6;"></span>
+                        </div>
+                    </div>
+                    <button class="btn btn-magenta btn-sm" id="logout-btn" onclick="logout()" style="margin-top: 15px; width: 100%;">Logout</button>
+                </div>
+
+                <div class="card controls-card" id="controls-card" style="margin-top: 20px;">
+                    <h3 class="card-header-title">Add_Torrent</h3>
+                    <div class="input-group">
+                        <input type="text" id="magnet-input" placeholder="magnet:?xt=urn:...">
+                        <button class="btn btn-full" onclick="addMagnet()">Add Magnet</button>
+                    </div>
+                    <div class="divider">OR</div>
+                    <div class="input-group">
+                        <input type="file" id="file-input" class="file-input">
+                        <button class="btn btn-magenta btn-full" onclick="addFile()">Upload .torrent</button>
+                    </div>
+                </div>
+                <!-- Рекламный блок -->
+                <div class="card promo-card" style="margin-top: 25px;">
+                    <div class="promo-glow"></div>
+                    <h3 class="promo-title">UPGRADE PLAN</h3>
+                    <p id="glich-text" class="promo-text glitch-text" data-target="BYPASS THE LIMITS. UNLOCK MAX_SIZE."></p>
+                    <a href="https://t.me/maloy_zvictory" target="_blank" class="btn btn-magenta btn-full promo-btn">
+                        [ JOIN_TELEGRAM ]
+                    </a>
+                    <div class="promo-footer">SUBSCRIPTION_LEVELS_AVAILABLE</div>
+                </div>
+            </aside>
+
+            <!-- Правая колонка (Transfers + Promo) -->
+            <div class="main-content-wrapper">
+                <!-- Блок с таблицей -->
+                <div class="card torrent-table-card">
+                    <div class="card-header">
+                        <h3 class="glitch" style="font-size: 1rem;">Active_Transfers</h3>
+                        <span id="torrent-count" class="badge">0</span>
+                    </div>
+                    
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Progress</th>
+                                    <th>Speed</th>
+                                    <th>Peers</th>
+                                </tr>
+                            </thead>
+                            <tbody id="torrent-table-body">
+                                <!-- Rows injected by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                
+            </div>
+
+        </div>
+    </main>
+</div>
+
+<script src="/static/script.js"></script>
+</body>
+</html>

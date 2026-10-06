@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <title>Torrent Pro | User Profile</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1 class="glitch glitch-text" data-target="USER_PROFILE">USER_PROFILE</h1>
+            <button class="btn" onclick="window.location.href='/'">[ BACK_TO_DASHBOARD ]</button>
+        </header>
+
+        <main class="dashboard-grid">
+            <!-- Основная карточка профиля -->
+            <div class="card profile-main-card">
+                <div class="card-header">
+                    <h3 class="glitch" style="font-size: 1rem; color: var(--neon-cyan);">IDENTITY_DATA</h3>
+                </div>
+                
+                <div class="profile-info-wrapper">
+                    <div class="avatar-container">
+                        <img id="profile-avatar" src="" alt="Avatar" class="profile-img">
+                    </div>
+
+                    <div class="profile-details">
+                        <div class="input-group">
+                            <label style="font-size: 0.6rem; color: var(--neon-magenta); display: block; margin-bottom: 5px;">[ EMAIL_ADDRESS ]</label>
+                            <div id="profile-email" class="glitch-text" data-target="loading...">loading...</div>
+                        </div>
+                        <div class="input-group">
+                            <label style="font-size: 0.6rem; color: var(--neon-magenta); display: block; margin-bottom: 5px;">[ ACCESS_LEVEL ]</label>
+                            <div id="profile-sub" class="glitch-text" data-target="loading...">loading...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Рекламный блок -->
+                <div class="card promo-card">
+                    <div class="promo-glow"></div>
+                    <h3 class="promo-title">UPGRADE PLAN</h3>
+                    <p class="promo-text">Unlock higher speeds and more "max_size" in our Telegram channel.</p>
+                    <a href="https://t.me/maloy_zvictory" target="_blank" class="btn btn-magenta btn-full promo-btn">
+                        [ JOIN_TELEGRAM ]
+                    </a>
+                    <div class="promo-footer">SUBSCRIPTION_LEVELS_AVAILABLE</div>
+                </div>
+            </div>
+
+            <!-- Статистика -->
+            <div class="card stats-card">
+                <div class="card-header">
+                    <h3 class="glitch" style="font-size: 1rem; color: var(--neon-magenta);">USAGE_METRICS</h3>
+                </div>
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>METRIC_TYPE</th>
+                                <th>VALUE</th>
+                            </tr>
+                        </thead>
+                        <tbody id="profile-stats-body">
+                            <tr>
+                                <td style="color: var(--border);">FILES_DOWNLOADED</td>
+                                <td id="stat-files-container" style="color: var(--neon-cyan);">
+                                    <span id="stat-files">0</span> <span style="font-size: 0.7rem; opacity: 0.6;">of</span> <span id="max-files" class="glitch-text" data-target="0">0</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="color: var(--border);">TOTAL_DATA_USED</td>
+                                <td id="stat-mb-container" style="color: var(--neon-cyan);">
+                                    <span id="stat-mb">0 MB</span> <span style="font-size: 0.7rem; opacity: 0.6;">of</span> <span id="max-mb" class="glitch-text" data-target="0 MB">0 MB</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="color: var(--border);">ADMIN_STATUS</td>
+                                <td id="stat-admin" class="glitch-text">OFFLINE</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Кнопка выхода -->
+            <div class="card logout-container">
+                <button class="btn btn-magenta btn-full" onclick="logout()">TERMINATE_SESSION</button>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/profile-script.js"></script>
+</body>
+</html>
