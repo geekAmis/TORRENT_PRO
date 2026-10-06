@@ -183,27 +183,81 @@ async function addMagnet() {
     }
 }
 
-async function addFile() {
+async function addFiles() {
     const input = document.getElementById("file-input");
-    const file = input?.files?.[0];
+    const files = input?.files;
 
-    if (!file) return;
+    if (!files || files.length === 0) {
+        alert("Пожалуйста, выберите хотя бы один файл.");
+        return;
+    }
 
-    const formData = new FormData();
-    formData.append("file", file);
+    const MAX_SIZE_MB = 5;
+    const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
+    const ALLOWED_EXTENSION = ".torrent";
 
-    try {
-        const response = await apiFetch("/torrent/file", {
-            method: "POST",
-            body: formData,
-        });
-        const result = await response.json();
+    // Превращаем FileList в массив, чтобы использовать map/forEach
+    const fileArray = Array.from(files);
+    
+    // Сначала делаем быструю валидацию, чтобы не начинать загрузку, если есть явные ошибки
+    for (const file of fileArray) {
+        if (!file.name.toLowerCase().endsWith(ALLOWED_EXTENSION)) {
+            alert(`Ошибка: Файл "${file.name}" не является .torrent файлом.`);
+            return;
+        }
+        if (file.size > MAX_SIZE_BYTES) {
+            alert(`Ошибка: Файл "${file.name}" слишком большой (макс. 5Мб).`);
+            return;
+        }
+    }
 
-        input.value = "";
-        await updateDownloads();
-        console.log("Torrent file added:", result);
-    } catch (err) {
-        alert(`Не удалось добавить torrent-файл: ${err.message}`);
+    console.log(`Начинаю загрузку ${fileArray.length} файлов...`);
+
+    // Создаем массив промисов для параллельной загрузки
+    const uploadPromises = fileArray.map(async (file) => {
+        const formData = new FormData();
+        formData.append("file", file); // Используем старый ключ "file", как в твоем первом коде
+
+        try {
+            const response = await apiFetch("/torrent/file", {
+                method: "POST",
+                body: formData,
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || "Ошибка сервера");
+            }
+
+            const result = await response.json();
+            console.log(`✅ Успешно: ${file.name}`, result);
+            return { name: file.name, status: 'success' };
+        } catch (err) {
+            console.error(`❌ Ошибка при загрузке ${file.name}:`, err.message);
+            return { name: file.name, status: 'error', message: err.message };
+        }
+    });
+
+    // Ждем завершения всех запросов (и успешных, и упавших)
+    const results = await Promise.all(uploadPromises);
+
+    // Анализируем результаты
+    const errors = results.filter(r => r.status === 'error');
+    const successes = results.filter(r => r.status === 'success');
+
+    // Очищаем инпут
+    input.value = "";
+
+    // Обновляем список загрузок
+    await updateDownloads();
+
+    // Выводим отчет пользователю
+    if (errors.length > 0) {
+        let errorMsg = `Загрузка завершена с ошибками:\n`;
+        errors.forEach(e => errorMsg += `- ${e.name}: ${e.message}\n`);
+        alert(errorMsg + `\nУспешно загружено: ${successes.length}`);
+    } else {
+        alert(`Все файлы (${successes.length}) успешно загружены!`);
     }
 }
 

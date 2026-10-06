@@ -40,15 +40,16 @@
                 </div>
 
                 <div class="card controls-card" id="controls-card" style="margin-top: 20px;">
-                    <h3 class="card-header-title">Add_Torrent</h3>
+                    <h3 class="card-header-title">Add Torrent</h3>
                     <div class="input-group">
                         <input type="text" id="magnet-input" placeholder="magnet:?xt=urn:...">
                         <button class="btn btn-full" onclick="addMagnet()">Add Magnet</button>
                     </div>
                     <div class="divider">OR</div>
                     <div class="input-group">
-                        <input type="file" id="file-input" class="file-input">
-                        <button class="btn btn-magenta btn-full" onclick="addFile()">Upload .torrent</button>
+                        <!-- Добавлен атрибут multiple и accept -->
+                        <input type="file" id="file-input" class="file-input" multiple accept=".torrent">
+                        <button class="btn btn-magenta btn-full" onclick="addFiles()">Upload .torrent Files</button>
                     </div>
                 </div>
                 <!-- Рекламный блок -->
