@@ -1,11 +1,11 @@
-# 🚀 TORRENT_PRO
+# 🚀 TORRENT_PRO <a href="https://secommu.com"><img src="https://img.shields.io/badge/LIVE_DEMO-secommu.com-brightgreen?style=for-the-badge&logo=googlechrome" alt="Live Demo"></a>
 
-* [![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
-  [![Libtorrent](https://img.shields.io/badge/Libtorrent-Python-blue?style=for-the-badge)](https://www.libtorrent.org/)
-  [![PostgreSQL](https://img.shields.io/badge/SQLAlchemy-Database-blue?style=for-the-badge)](https://www.sqlalchemy.org/)
-* [![Google OAuth](https://img.shields.io/badge/Auth-Google_OAuth-red?style=for-the-badge)](https://developers.google.com/identity/sign-in/web/guides/overview)
 
-A high-performance, scalable, and multi-user Torrent Management Backend. This system allows users to add torrents via Magnet links or `.torrent` files, manage downloads, and respect subscription-based resource limits (MB and Torrent counts).
+
+[![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
+[![Libtorrent](https://img.shields.io/badge/Libtorrent-Python-blue?style=for-the-badge)](https://www.libtorrent.org/)
+[![PostgreSQL](https://img.shields.io/badge/SQLAlchemy-Database-blue?style=for-the-badge)](https://www.sqlalchemy.org/)
+[![Google OAuth](https://img.shields.io/badge/Auth-Google_OAuth-red?style=for-the-badge)](https://developers.google.com/identity/sign-in/web/guides/overview)
 
 ---
 ## 🖥️ Interface Preview
@@ -29,6 +29,10 @@ A high-performance, scalable, and multi-user Torrent Management Backend. This sy
   <img src="https://github.com/user-attachments/assets/44b5efbc-c22b-4a71-a968-29ca94ee3f76" width="30%" style="border-radius: 5px; margin: 5px;">
   <img src="https://github.com/user-attachments/assets/53446dbe-0b9a-4025-923c-003a830cd563" width="30%" style="border-radius: 5px; margin: 5px;">
 </p>
+
+
+
+A high-performance, scalable, and multi-user Torrent Management Backend. This system allows users to add torrents via Magnet links or `.torrent` files, manage downloads, and respect subscription-based resource limits (MB and Torrent counts).
 
 ## ✨ Key Features
 
