@@ -8,6 +8,27 @@
 A high-performance, scalable, and multi-user Torrent Management Backend. This system allows users to add torrents via Magnet links or `.torrent` files, manage downloads, and respect subscription-based resource limits (MB and Torrent counts).
 
 ---
+## 🖥️ Interface Preview
+<table style="width: 100%; border-collapse: collapse; border: none;">
+  <tr>
+    <td style="padding: 5px; border: none; width: 50%;">
+      <img src="https://github.com/user-attachments/assets/5901c87f-e49e-462f-8ede-4619892ce4d2" alt="Screenshot 1" style="width: 100%; border-radius: 8px; border: 1px solid #30363d;">
+    </td>
+    <td style="padding: 5px; border: none; width: 50%;">
+      <img src="https://github.com/user-attachments/assets/d9812c7c-aace-4c76-b2c7-0ace5acb668d" alt="Screenshot 2" style="width: 100%; border-radius: 8px; border: 1px solid #30363d;">
+    </td>
+  </tr>
+</table>
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/d9812c7c-aace-4c76-b2c7-0ace5acb668d" width="30%" style="border-radius: 5px; margin: 5px;">
+  <img src="https://github.com/user-attachments/assets/d2684602-6959-466c-a8a7-fc3c1fbcad4c" width="30%" style="border-radius: 5px; margin: 5px;">
+  <img src="https://github.com/user-attachments/assets/973bb67f-38b3-4ac6-8ab3-edc4651b75a2" width="30%" style="border-radius: 5px; margin: 5px;">
+</p>
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/44b5efbc-c22b-4a71-a968-29ca94ee3f76" width="30%" style="border-radius: 5px; margin: 5px;">
+  <img src="https://github.com/user-attachments/assets/53446dbe-0b9a-4025-923c-003a830cd563" width="30%" style="border-radius: 5px; margin: 5px;">
+</p>
 
 ## ✨ Key Features
 
